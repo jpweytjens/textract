@@ -14,7 +14,7 @@ class Parser(ShellParser):
     (default) or the ``pdfminer`` method.
     """
 
-    def extract(self, filename, method='', **kwargs):
+    def extract(self, filename, method='', dpi=300, **kwargs):
         if method == '' or method == 'pdftotext':
             try:
                 return self.extract_pdftotext(filename, **kwargs)
@@ -30,7 +30,7 @@ class Parser(ShellParser):
         elif method == 'pdfminer':
             return self.extract_pdfminer(filename, **kwargs)
         elif method == 'tesseract':
-            return self.extract_tesseract(filename, **kwargs)
+            return self.extract_tesseract(filename, dpi, **kwargs)
         else:
             raise UnknownMethod(method)
 
@@ -43,23 +43,48 @@ class Parser(ShellParser):
         stdout, _ = self.run(args)
         return stdout
 
-    def extract_pdfminer(self, filename, **kwargs):
-        """Extract text from pdfs using pdfminer."""
-        stdout, _ = self.run(['pdf2txt.py', filename])
+
+    def convert_pdftoppm(self, filename, directory, dpi, **kwargs):
+        """Convert pdf to images for tesseract using pdftoppm."""
+
+        stdout, _ = self.run(['pdftoppm', '-r', str(dpi), filename, directory])
+
         return stdout
 
-    def extract_tesseract(self, filename, **kwargs):
-        """Extract text from pdfs using tesseract (per-page OCR)."""
-        temp_dir = mkdtemp()
-        base = os.path.join(temp_dir, 'conv')
-        contents = []
-        try:
-            stdout, _ = self.run(['pdftoppm', filename, base])
+    def convert_imagemagick(self, filename, directory, dpi, **kwargs):
+        """Convert pdf to images for tesseract using imagemagick."""
 
-            for page in sorted(os.listdir(temp_dir)):
-                page_path = os.path.join(temp_dir, page)
-                page_content = TesseractParser().extract(page_path, **kwargs)
-                contents.append(page_content)
-            return six.b('').join(contents)
+        stdout, _ = self.run(["convert", "-density", str(dpi), "+adjoin", "-alpha", "off", filename, directory + "/" + filename.replace(".pdf", "-%d.png")])
+
+        return stdout
+
+    def extract_pdfminer(self, filename, **kwargs):
+        """Extract text from pdfs using pdfminer."""
+
+        stdout, _ = self.run(['pdf2txt.py', filename])
+
+        return stdout
+
+    def extract_tesseract(self, filename, dpi, **kwargs):
+        """Extract text from pdfs using tesseract (per-page OCR)."""
+
+        try:
+            for convert_pdf in [self.convert_pdftoppm, self.convert_imagemagick]:
+                temp_dir = mkdtemp()
+                # base = os.path.join(temp_dir, 'conv')
+                contents = []
+
+                try:
+                    stdout = convert_pdf(filename, temp_dir, dpi)
+
+                    for page in sorted(os.listdir(temp_dir)):
+                        page_path = os.path.join(temp_dir, page)
+                        page_content = TesseractParser().extract(page_path, **kwargs)
+                        contents.append(page_content)
+
+                    return six.b('').join(contents)
+
+                except ShellError:
+                    break
         finally:
             shutil.rmtree(temp_dir)
